@@ -511,9 +511,16 @@ private:
                 JsonValue resp = JsonValue::make_object();
                 resp["op"] = "service_response";
                 resp["service"] = service;
-                resp["values"] = result.second;
+                // *CHANGES*: Support explicit __status__ in internal service return values to set response status directly.
+                if (result.second.is_object() && result.second.contains("__status__")) {
+                    resp["status"] = result.second["__status__"].as_string();
+                    result.second.as_object().erase("__status__");
+                    resp["values"] = result.second;
+                } else {
+                    resp["values"] = result.second;
+                    resp["status"] = result.first ? "" : (result.second.contains("error") ? result.second["error"].as_string() : "error");
+                }
                 resp["result"] = result.first;
-                resp["status"] = result.first ? "" : (result.second.contains("error") ? result.second["error"].as_string() : "error");
                 if (req_id) {
                     resp["id"] = *req_id;
                 }
@@ -535,9 +542,10 @@ private:
                 std::string provider_call_id = "provider-call-" + std::to_string(next_call_id.fetch_add(1));
                 {
                     std::lock_guard<std::mutex> lock(services_mtx);
+                    // *CHANGES*: Raise external service call timeout to 30 seconds as recommended by spec.
                     pending_calls[provider_call_id] = {
                         conn, provider_conn, req_id ? *req_id : JsonValue(), service,
-                        std::chrono::steady_clock::now() + std::chrono::seconds(5)};
+                        std::chrono::steady_clock::now() + std::chrono::seconds(30)};
                 }
 
                 // Forward call_service to provider

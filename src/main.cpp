@@ -10,6 +10,8 @@
 #include "robot_world_state_publisher.hpp"
 #include "joint_state_publisher.hpp"
 #include "finite_state_machine.hpp"
+// *CHANGES*: Include Project 4 IK service header.
+#include "ik_service.hpp"
 
 namespace {
 std::atomic<bool> keep_running{true};
@@ -32,6 +34,8 @@ int main(int argc, char** argv) {
     // *CHANGES*: Task 6 loads descriptions through parameter services before the gateway opens.
     robot::DescriptionLoader descriptions(hub);
     descriptions.start();
+    // *CHANGES*: Project 4 IK service provides /ik/robot_jacobian before the gateway opens.
+    ik::IKService ik_service(hub);
     // *CHANGES*: Only the demo runtime may run the demo servo and FSM.
     robot::JointStatePublisher joints(hub);
     robot::FiniteStateMachine fsm(hub);

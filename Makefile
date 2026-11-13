@@ -5,8 +5,9 @@ build: main build/urdf_example
 # *CHANGES*: Keep make run fast after build by tracking communication source dependencies.
 # *CHANGES*: Rebuild the runtime when the Task 2 parameter services change.
 # *CHANGES*: Link the demo servo and FSM while keeping their startup behind --demo.
-main: src/main.cpp src/robot_model.cpp src/math3d.cpp src/forward_kinematics.cpp src/robot_description_loader.cpp src/robot_world_state_publisher.cpp src/joint_state_publisher.cpp src/finite_state_machine.cpp include/robot_model.hpp include/math3d.hpp include/forward_kinematics.hpp include/robot_description_loader.hpp include/robot_world_state_publisher.hpp include/joint_state_publisher.hpp include/finite_state_machine.hpp include/parameter_server.hpp include/middleware/middleware.hpp include/middleware/rosbridge_server.hpp include/middleware/json.hpp $(PUGIXML)/pugixml.cpp $(PUGIXML)/pugixml.hpp
-	g++ -std=c++20 -O2 -pthread -Iinclude -I$(PUGIXML) -o main src/main.cpp src/robot_model.cpp src/math3d.cpp src/forward_kinematics.cpp src/robot_description_loader.cpp src/robot_world_state_publisher.cpp src/joint_state_publisher.cpp src/finite_state_machine.cpp $(PUGIXML)/pugixml.cpp
+# *CHANGES*: Link Project 4 IK service for /ik/robot_jacobian checkpoint.
+main: src/main.cpp src/ik_service.cpp src/robot_model.cpp src/math3d.cpp src/forward_kinematics.cpp src/robot_description_loader.cpp src/robot_world_state_publisher.cpp src/joint_state_publisher.cpp src/finite_state_machine.cpp include/ik_service.hpp include/robot_model.hpp include/math3d.hpp include/forward_kinematics.hpp include/robot_description_loader.hpp include/robot_world_state_publisher.hpp include/joint_state_publisher.hpp include/finite_state_machine.hpp include/parameter_server.hpp include/middleware/middleware.hpp include/middleware/rosbridge_server.hpp include/middleware/json.hpp $(PUGIXML)/pugixml.cpp $(PUGIXML)/pugixml.hpp
+	g++ -std=c++20 -O2 -pthread -Iinclude -I$(PUGIXML) -o main src/main.cpp src/ik_service.cpp src/robot_model.cpp src/math3d.cpp src/forward_kinematics.cpp src/robot_description_loader.cpp src/robot_world_state_publisher.cpp src/joint_state_publisher.cpp src/finite_state_machine.cpp $(PUGIXML)/pugixml.cpp
 
 build/urdf_example: src/urdf_example.cpp $(PUGIXML)/pugixml.cpp $(PUGIXML)/pugixml.hpp
 	mkdir -p build

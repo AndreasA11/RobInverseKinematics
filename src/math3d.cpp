@@ -33,6 +33,15 @@ Vector3 normalized(const Vector3& v) {
     return scale(v, 1.0 / length);
 }
 
+// *CHANGES*: Implement standard 3D right-handed cross product for Project 4.
+Vector3 cross(const Vector3& a, const Vector3& b) {
+    return {
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0]
+    };
+}
+
 Quaternion normalized(const Quaternion& q) {
     double length = std::hypot(std::hypot(q.x, q.y), std::hypot(q.z, q.w));
     if (!(length > 0.0) || !std::isfinite(length)) {
@@ -148,6 +157,15 @@ Vector3 transform_point(const Matrix4& transform, const Vector3& point) {
             transform(1, 2) * point[2] + transform(1, 3),
         transform(2, 0) * point[0] + transform(2, 1) * point[1] +
             transform(2, 2) * point[2] + transform(2, 3)};
+}
+
+// *CHANGES*: Implement 3D vector rotation using 3x3 rotation submatrix.
+Vector3 rotate_vector(const Matrix4& transform, const Vector3& v) {
+    return {
+        transform(0, 0) * v[0] + transform(0, 1) * v[1] + transform(0, 2) * v[2],
+        transform(1, 0) * v[0] + transform(1, 1) * v[1] + transform(1, 2) * v[2],
+        transform(2, 0) * v[0] + transform(2, 1) * v[1] + transform(2, 2) * v[2]
+    };
 }
 
 } // namespace math3d

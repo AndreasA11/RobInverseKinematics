@@ -14,6 +14,8 @@ Vector3 scale(const Vector3& v, double factor);
 double dot(const Vector3& a, const Vector3& b);
 double norm(const Vector3& v);
 Vector3 normalized(const Vector3& v);
+// *CHANGES*: Add 3D vector cross product for Project 4 Jacobian calculations.
+Vector3 cross(const Vector3& a, const Vector3& b);
 
 struct Quaternion {
     double x{0.0};
@@ -49,6 +51,8 @@ Matrix4 multiply(const Matrix4& parent, const Matrix4& child);
 Vector3 translation_of(const Matrix4& transform);
 Quaternion rotation_of(const Matrix4& transform);
 Vector3 transform_point(const Matrix4& transform, const Vector3& point);
+// *CHANGES*: Add vector rotation using upper-left 3x3 block of Matrix4 for Jacobian joint axes.
+Vector3 rotate_vector(const Matrix4& transform, const Vector3& v);
 
 } // namespace math3d
 
