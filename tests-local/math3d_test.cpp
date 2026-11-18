@@ -101,4 +101,37 @@ int main() {
             valid_rotation(round_trip);
         }
     }
+
+    // *CHANGES*: Test Project 4 Matrix3, quaternion rotation, angle, and rotation vector routines.
+    Quaternion q_test = from_axis_angle({0, 0, 1}, pi / 3);
+    Matrix3 r_test = from_quaternion(q_test);
+    double angle_test = rotation_angle(r_test);
+    near(angle_test, pi / 3, 1e-7);
+    Vector3 rv_test = rotation_vector(r_test);
+    near_vector(rv_test, {0, 0, pi / 3});
+
+    // Angle = 0 identity
+    Matrix3 r_ident;
+    near(rotation_angle(r_ident), 0.0, 1e-12);
+    near_vector(rotation_vector(r_ident), {0, 0, 0});
+
+    // Angle = pi
+    Quaternion q_pi = from_axis_angle({0, 1, 0}, pi);
+    Matrix3 r_pi = from_quaternion(q_pi);
+    near(rotation_angle(r_pi), pi, 1e-7);
+    Vector3 rv_pi = rotation_vector(r_pi);
+    near(norm(rv_pi), pi, 1e-6);
+
+    // *CHANGES*: Test solve_linear_system 3x3 and 6x6.
+    std::array<std::array<double, 3>, 3> A3{{
+        {2.0, 1.0, -1.0},
+        {-3.0, -1.0, 2.0},
+        {-2.0, 1.0, 2.0}
+    }};
+    std::array<double, 3> b3{8.0, -11.0, -3.0};
+    std::array<double, 3> x3{0.0, 0.0, 0.0};
+    assert(solve_linear_system<3>(A3, b3, x3));
+    near(x3[0], 2.0, 1e-7);
+    near(x3[1], 3.0, 1e-7);
+    near(x3[2], -1.0, 1e-7);
 }

@@ -1,142 +1,126 @@
-# Project 4 Checkpoint: Robot Jacobian Service (/ik/robot_jacobian)
+# Project 4 Full Implementation Plan: Step and Solve Services
 
 ## Goal
 
-Implement the `/ik/robot_jacobian` service on top of the Project 3 runtime, passing all checkpoint requirements (Categories A and B from `spec/OVERVIEW.md` and `spec/IK_API.md`). The service returns the manipulator Jacobian for any kinematic chain of a loaded URDF robot at any requested configuration in the root-link frame.
+Complete the implementation of Project 4 by adding `/ik/solve_robot_step` and `/ik/solve_robot` to the runtime, satisfying all requirements for Categories C (Gradient step), D (IK solve, position), E (IK solve, orientation), and the near-1 MiB description test from Category B, building on top of the validated `/ik/robot_jacobian` checkpoint.
 
 ## Relevant requirements
 
 1. **Protocol & Gateway (`127.0.0.1:9095`)**:
-   - Speak the ROS-like newline-delimited TCP/JSON protocol.
-   - Service responses follow `{"op": "service_response", "service": "/ik/robot_jacobian", "values": {...}, "result": <bool>, "status": <string>, "id": <req_id>}`.
-   - Handle payload and line sizes up to 1 MiB without fixed 64 KiB buffer limits.
-   - The service must answer within 10 seconds of `make run` starting.
+   - Adhere to the newline-delimited TCP JSON ROS-like protocol.
+   - Service responses match:
+     `{"op": "service_response", "service": <svc>, "values": {...}, "result": <bool>, "status": <string>, "id": <req_id>}`.
+   - Line and payload buffers must seamlessly handle >= 1 MiB.
+   - Must answer within 10 seconds of `make run`.
 
 2. **Parameter Server Integration & Version Tracking**:
-   - Robot description is fetched from `/param_server/get_param` (`name: "robot_description"`).
-   - `values.description_version`: Every response (success or error) MUST carry the version of `robot_description` it was computed for, or 0 if `robot_description` was never set.
-   - Pickup bound: Within 2 seconds of a `set_param` returning version $V$, every reply must carry `description_version >= V` and reflect description $V$.
-   - Invalid descriptions: If newest description is invalid (per `spec/ROBOT_DESCRIPTION.md`), the service must not crash or hang; it rejects requests with `result: false`, non-empty `status`, and `description_version` matching the invalid version. When the next valid description is set, it must be picked up.
-   - No robot loaded: If `robot_description` was never set, requests must return `result: false`, non-empty `status`, and `values: {"description_version": 0}`.
+   - Query `robot_description` from `/param_server/get_param`.
+   - `description_version` included in every reply (success or error). Version 0 if no robot loaded.
+   - Within 2 seconds of `set_param` returning version $V$, replies reflect version $\ge V$.
+   - Rejection on invalid URDF without crashing, recovering when valid description arrives.
 
-3. **Chain Extraction**:
-   - For link $e$ (`endeffector_frame`), trace the path from root link to $e$.
-   - Extract movable joints (`revolute`, `continuous`, `prismatic`) in root-to-end-effector order.
-   - Fixed joints along the chain contribute their `<origin>` to kinematics but have no row in the Jacobian and are not in `joint_names`.
-   - Joints on other branches are ignored.
-   - Unknown `endeffector_frame` must return `result: false` and non-empty `status`.
+3. **Service: `/ik/solve_robot_step`**:
+   - Request fields:
+     * `joint_state`: current configuration $q$
+     * `endeffector_frame`: string name of chain link
+     * `endeffector_pose`: `position` {x,y,z} and `orientation` {x,y,z,w}
+     * `ik_position_only`: bool
+     * `method`: `"JacobianTranspose"` or `"JacobianPseudoinverse"`
+     * `step_length`: $\alpha > 0$
+     * `damping`: $\lambda \ge 0$
+   - Course defaults if client leaves optional fields out:
+     `method: "JacobianTranspose"`, `step_length: 0.1`, `ik_position_only: true`, `damping: 0.0`.
+   - Step formula:
+     * Position error $e = p_{\text{target}} - p_e(q)$.
+     * Full pose error: $e_{6D} = [e ; e_\omega]$, with $e_\omega$ the rotation vector (axis $\times$ angle) of $R_{\text{target}} R_e(q)^T$.
+     * `"JacobianTranspose"`: $\Delta q = \alpha J^T e$.
+     * `"JacobianPseudoinverse"`: $\Delta q = \alpha J^T (J J^T + \lambda^2 I)^{-1} e$.
+   - Stateless: does not remember or continue past calls.
+   - Reply:
+     `{"values": {"configuration_solution": {"name": [...], "position": [...]}, "description_version": V}, "result": true, "status": ""}`.
+   - Precision: $q + \Delta q$ within $10^{-4}$ of exact value.
 
-4. **Jacobian Computation**:
-   - Forward kinematics computed at given configuration $q$.
-   - Joint states: `name` and `position` arrays. If lengths differ or position for a chain movable joint is not a finite number (or is boolean), reject with `result: false` and non-empty `status`.
-   - Movable joints not in `joint_state` default to 0. Names not in movable joints of the robot are ignored.
-   - Joint positions are used as given (never clamped to limits for Jacobian calculation).
-   - For end-effector point $p_e$ (origin of $e$ in root frame) and each chain movable joint $i$ with origin $p_i$ and rotation $R_i$ (after origin, before motion) and URDF axis $a_i$:
-     * Revolute/Continuous: row is $[\hat{z}_i \times (p_e - p_i) ; \hat{z}_i]$, where $\hat{z}_i = R_i \cdot a_i / \|a_i\|$.
-     * Prismatic: row is $[R_i \cdot a_i ; 0, 0, 0]$, where $a_i$ is used as written (NOT normalized).
-   - Layout: $N \times 6$ (row $i$ corresponds to `joint_names[i]`).
-   - Every entry within $10^{-4}$ of exact value.
+4. **Service: `/ik/solve_robot`**:
+   - Request fields: all fields from step plus:
+     * `position_tolerance`: meters $> 0$
+     * `orientation_tolerance`: radians $> 0$ (used when `ik_position_only: false`)
+     * `max_iterations`: integer $\ge 1$
+   - Iteration algorithm:
+     1. Evaluate FK at current $q$.
+     2. Compute position error $\|p_{\text{target}} - p_e(q)\|$.
+        For full pose: compute geodesic orientation error $\theta = \text{angle}(R_{\text{target}}^T R_e(q)) \in [0, \pi]$.
+     3. If errors are within tolerance: stop with `converged: true`.
+     4. If iteration count reached `max_iterations`: stop with `converged: false`.
+     5. Take one gradient step with requested method, step length, damping.
+     6. Clamp revolute and prismatic joints to their URDF limits $[lower, upper]$. Continuous joints have no limits.
+     7. Repeat from 1.
+   - Reply:
+     * `configuration_solution`: final configuration.
+     * `converged`: boolean.
+     * `final_error`: `{"position": <m>, "orientation": <rad> | null}` of the returned configuration.
+     * `iterations`: number of steps taken.
+     * `description_version`: V.
+     * `result`: MUST equal `converged`.
+     * `status`: `"converged"` if converged, non-empty error status if not converged (e.g. `"did not converge"`).
+   - Speed: Solves must complete within a fraction of a second (< 5s for 2000 iterations).
 
 ## Repository observations
 
-- `src/main.cpp`: Initializes `Middleware`, `ParameterServer`, `DescriptionLoader`, `WorldStatePublisher`, and `RosbridgeServer`.
-- `include/parameter_server.hpp`: Thread-safe parameter server advertising `/param_server/set_param` and `/param_server/get_param`.
-- `include/robot_model.hpp` / `src/robot_model.cpp`: Complete URDF parser (`parse_urdf`) conforming to `spec/ROBOT_DESCRIPTION.md`.
-- `include/forward_kinematics.hpp` / `src/forward_kinematics.cpp`: Computes `joint_transforms` and `link_poses` in root-link frame.
-- `include/math3d.hpp` / `src/math3d.cpp`: 3D vector and matrix math, needs cross product and vector rotation helper.
-- `include/middleware/rosbridge_server.hpp`: Dynamically buffers TCP input line-by-line; service response handler needs clean support for explicit `status` string.
+- `IKService` (`src/ik_service.cpp`, `include/ik_service.hpp`) already has:
+  * Thread-safe model caching and version tracking.
+  * Chain extraction (root to end-effector link, excluding fixed joints and branches).
+  * Joint state input validation and default zeroing.
+  * Forward kinematics calculation via `robot::compute_fk`.
+  * Joint frame origin $p_i$, rotation $R_i$, and Jacobian row computation for revolute, continuous, and prismatic joints.
+- `math3d` (`src/math3d.cpp`, `include/math3d.hpp`) contains 3D vector and matrix utilities.
+- `RosbridgeServer` supports `__status__` extraction to allow service handlers to customize top-level `status` for both success and non-converged/error responses.
 
 ## Proposed architecture
 
-1. **`math3d` extensions** (`include/math3d.hpp`, `src/math3d.cpp`):
-   - Add `cross(const Vector3& a, const Vector3& b)`: standard 3D cross product.
-   - Add `rotate_vector(const Matrix4& transform, const Vector3& v)`: rotates vector using upper-left 3x3 block of matrix.
+1. **`math3d` Extensions**:
+   - Add $3 \times 3$ matrix multiplication and transpose helpers.
+   - Add function to compute quaternion rotation matrix $R_{\text{target}}$.
+   - Add function to compute orientation difference angle $\theta \in [0, \pi]$ and rotation vector $e_\omega$ according to spec formulas:
+     $\theta = \text{atan2}(\|v\|/2, (\text{trace}(R) - 1)/2)$ where $v = [R_{32} - R_{23}, R_{13} - R_{31}, R_{21} - R_{12}]$.
+     $u = v / \|v\|$ for $0 < \theta < \pi$, $e_\omega = \theta u$. Handle $\theta = 0$ and $\theta = \pi$ boundary conditions cleanly.
+   - Add small linear system solver `solve_linear_system<N>(A, b, x)` using Gaussian elimination with partial row pivoting ($N=3$ and $N=6$).
 
-2. **`RosbridgeServer` status enhancement** (`include/middleware/rosbridge_server.hpp`):
-   - In `call_service` response builder, check if `result.second` has `"__status__"`. If present, extract to top-level `status` and remove from `values`. This allows service handlers to set custom non-empty status strings while keeping `values` clean and standard.
+2. **`IKService` Refactoring & Additions**:
+   - Separate chain and configuration extraction into reusable internal helpers:
+     * `extract_chain(ee_link_idx, chain_movable_joints, joint_names, chain_movable_names)`
+     * `parse_and_validate_joint_state(js, chain_movable_names, config_out, error_msg)`
+     * `compute_jacobian_internal(fk, chain_movable_joints, p_e, J_v, J_omega)`
+   - Implement `compute_step_delta(...)`:
+     * Handles position-only and full-pose errors.
+     * Supports `"JacobianTranspose"` and `"JacobianPseudoinverse"` (damped least squares $J J^T + \lambda^2 I$).
+   - Implement `handle_solve_robot_step(args)`:
+     * Parses request, validates inputs and fills defaults.
+     * Evaluates single step, constructs response.
+   - Implement `handle_solve_robot(args)`:
+     * Parses request, validates tolerances and max iterations.
+     * Executes iterative gradient loop with limit clamping and convergence checking.
+     * Evaluates final FK and errors on configuration returned.
+     * Returns `result: converged`, `converged`, `final_error`, `configuration_solution`.
 
-3. **`IKService` module** (`include/ik_service.hpp`, `src/ik_service.cpp`):
-   - Class `IKService` taking `middleware::Middleware&`.
-   - Advertises `/ik/robot_jacobian` on startup, unadvertises on destruction.
-   - Internal robot model caching:
-     * On each request, inspect `/param_server/get_param` for `robot_description`.
-     * If version is unchanged, reuse cached model.
-     * If version changed, parse URDF using `parse_urdf`. If valid, update cache and mark valid; if invalid, cache invalid status and version.
-     * Zero-latency, thread-safe, meets the < 2s pickup bound instantaneously.
-   - Handler `handle_robot_jacobian(const JsonValue& args)`:
-     * Validate robot loaded and valid.
-     * Validate `endeffector_frame` exists in model.
-     * Validate `joint_state` format and lengths.
-     * Build kinematic chain from root to `endeffector_frame`.
-     * Extract movable joints and validate their positions.
-     * Run FK to get `link_poses`.
-     * Compute end-effector point $p_e$.
-     * For each movable joint, compute $T_{root \to \text{joint}}$, $p_i$, $R_i$, and Jacobian row.
-     * Format response JSON with `joint_names`, `jacobian`, `description_version`, `endeffector_frame`, and `status`.
-
-4. **Wiring into `src/main.cpp` and `Makefile`**:
-   - Instantiate `ik::IKService ik_service(hub);` in `main.cpp`.
-   - Update `Makefile` compilation dependencies for `main`.
-
-## Interfaces and data flow
-
-```
-External Client (TCP :9095)
-         │
-         ▼
-RosbridgeServer (reads newline-delimited JSON)
-         │
-         ▼
-Middleware::call_service("/ik/robot_jacobian", args)
-         │
-         ▼
-IKService::handle_robot_jacobian
-   ├── queries /param_server/get_param ("robot_description")
-   ├── parses / retrieves cached RobotModel
-   ├── validates endeffector_frame and joint_state
-   ├── traces chain root -> endeffector_frame
-   ├── evaluates compute_fk(model, joint_positions)
-   └── calculates 6D Jacobian rows for each movable joint
-         │
-         ▼
-JSON response: { "op": "service_response", "service": "/ik/robot_jacobian",
-                 "values": { "joint_names": [...], "jacobian": [...],
-                             "description_version": V, "endeffector_frame": "tip" },
-                 "result": true, "status": "" }
-```
+3. **`main.cpp` & `Makefile`**:
+   - `ik::IKService` already created in `main.cpp`. It registers the two new services `/ik/solve_robot_step` and `/ik/solve_robot`.
 
 ## Implementation steps
 
-1. Extend `math3d` with `cross` and `rotate_vector`.
-2. Enhance `RosbridgeServer` service response builder for `__status__` extraction.
-3. Implement `IKService` (`include/ik_service.hpp` and `src/ik_service.cpp`).
-4. Update `src/main.cpp` to initialize `IKService`.
-5. Update `Makefile` to compile `src/ik_service.cpp`.
-6. Compile project with `make build` and verify clean build.
-7. Create local unit/integration tests and run all checks.
-
-## Edge cases and failure modes
-
-- **No robot loaded**: Returns `result: false`, `status: "no robot loaded"`, `description_version: 0`.
-- **Invalid URDF loaded**: Returns `result: false`, non-empty `status`, `description_version: invalid_version`.
-- **Unknown end-effector link**: Returns `result: false`, non-empty `status`, echoes current `description_version`.
-- **Mismatched name/position lengths in joint_state**: Returns `result: false`, non-empty `status`.
-- **Non-numeric or boolean position for chain movable joint**: Returns `result: false`, non-empty `status`.
-- **Positions for non-chain joints**: Ignored, does not fail request.
-- **Movable joint missing in joint_state**: Defaults position to 0.0.
-- **Fixed joints**: Contributed to FK transforms, skipped in Jacobian rows and `joint_names`.
-- **Branches in robot tree**: Only joints strictly on the direct chain from root to end-effector are included.
-- **Prismatic joints**: Axis used as written (unnormalized), angular velocity set to $[0, 0, 0]$.
-- **Revolute/Continuous joints**: Axis normalized, linear velocity is $\hat{z} \times (p_e - p_i)$, angular velocity is $\hat{z}$.
-- **Positions outside limits**: Used as given, not clamped.
-
-## Verification strategy
-
-- Verify two-link worked example from `spec/IK_API.md`:
-  At shoulder = 0, elbow = $\pi/2$, rows must match `[-1, 1, 0, 0, 0, 1]` and `[-1, 0, 0, 0, 0, 1]` within $10^{-4}$.
-- Test finite differences vs Forward Kinematics to confirm numerical derivatives.
-- Test spatial chains with arbitrary RPY and rotated axes.
-- Test prismatic joints with non-unit axis.
-- Test branch exclusion on multi-arm robots.
-- Test version tracking, invalid URDF handling, error rejection for bad inputs.
-- Run all existing Project 3 tests to ensure zero regressions.
+1. Add rotation difference, rotation vector, and linear system solver to `include/math3d.hpp` and `src/math3d.cpp`.
+2. Add unit tests for math routines in `tests-local/math3d_test.cpp` and verify.
+3. Update `include/ik_service.hpp` and `src/ik_service.cpp` to implement `/ik/solve_robot_step` and `/ik/solve_robot`.
+4. Compile with `make build` and fix any compiler warnings.
+5. Create comprehensive verification tests in `tests-local/test_ik_verification.py` checking:
+   - 2-link arm single steps (transpose and pseudoinverse, damped and undamped).
+   - Numerical gradient vs analytical Jacobian step.
+   - Multi-link full-pose 6D step.
+   - Position-only solve to convergence.
+   - Unreachable target reporting (`converged: false`).
+   - Joint limits enforcement during solve.
+   - Full-pose 6-DOF / 7-DOF arm solve.
+   - Version tracking and dynamic reload during solves.
+6. Verify 1 MiB line handling with large URDF descriptions.
+7. Update `tests/` pass/fail suite (ensuring exactly $\le 25$ tests) to include Project 4 step and solve tests.
+8. Run full `make test` and verify 25 of 25 pass cleanly.
+9. Record implementation notes and handoff in `agent-notes/IMPLEMENTATION.md`.
